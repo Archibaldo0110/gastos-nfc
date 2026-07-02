@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<meta name="theme-color" content="#ffffff"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-title" content="Gastos"/>
+<link rel="manifest" href="manifest.json"/>
+<title>Gastos</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#fff;--s1:#f5f5f4;--s2:#e7e5e4;
+  --tx:#111;--mu:#999;--ac:#2563eb;--ac2:#eff6ff;
+  --ok:#16a34a;--er:#dc2626;--r:12px
+}
+@media(prefers-color-scheme:dark){
+  :root{--bg:#0a0a0a;--s1:#1c1c1c;--s2:#2a2a2a;--tx:#f0f0f0;--mu:#666;--ac2:#1e2a40}
+}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--tx);padding-bottom:calc(2rem + env(safe-area-inset-bottom))}
+#app{max-width:480px;margin:0 auto;padding:1.25rem 1rem}
+
+.top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem}
+.cfg-btn{background:none;border:1px solid var(--s2);border-radius:8px;padding:5px 11px;font-size:12px;color:var(--mu);cursor:pointer}
+.sync-dot{width:8px;height:8px;border-radius:50%;background:var(--s2);cursor:pointer}
+.sync-dot.ok{background:var(--ok)}
+.sync-dot.err{background:var(--er)}
+.sync-dot.spin{background:var(--ac);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+.total{text-align:center;margin-bottom:1.25rem}
+.total-num{font-size:52px;font-weight:600;letter-spacing:-2px;line-height:1}
+.total-sub{font-size:13px;color:var(--mu);margin-top:5px}
+
+.mes-toggle{display:block;text-align:center;font-size:12px;color:var(--ac);background:none;border:none;cursor:pointer;margin:0 auto 1.5rem;padding:4px}
+
+.box{background:var(--s1);border-radius:var(--r);padding:1rem;margin-bottom:1.75rem}
+.input-row{display:flex;gap:8px}
+.input-row input{flex:1;background:var(--bg);border:1px solid var(--s2);border-radius:8px;padding:10px 13px;font-size:15px;color:var(--tx);outline:none}
+.input-row input:focus{border-color:var(--ac)}
+.input-row input::placeholder{color:var(--mu)}
+.send-btn{width:42px;height:42px;flex-shrink:0;border:none;border-radius:8px;background:var(--ac);color:#fff;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.send-btn:active{opacity:.8}
+
+.sub-row{display:flex;justify-content:space-between;align-items:center;margin-top:9px;padding:0 2px}
+.mic-btn{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mu);background:none;border:none;cursor:pointer;padding:4px 0}
+.mic-btn.on{color:var(--er)}
+.mic-dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.mic-btn.on .mic-dot{animation:pulse 1s infinite}
+.hint{font-size:12px;color:var(--mu)}
+
+.ai-row{display:none;justify-content:center;font-size:13px;color:var(--ac);margin-top:9px}
+
+/* panel config */
+.cfg-panel{background:var(--s1);border-radius:var(--r);padding:1rem;margin-bottom:1.5rem;display:none}
+.cfg-panel.open{display:block}
+.cfg-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:13px;font-weight:500}
+.cfg-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--mu);line-height:1}
+.cfg-panel input{width:100%;background:var(--bg);border:1px solid var(--s2);border-radius:8px;padding:8px 12px;font-size:13px;color:var(--tx);margin-bottom:8px;outline:none}
+.cfg-panel input::placeholder{color:var(--mu)}
+.cfg-save{width:100%;padding:9px;background:var(--ac);color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer}
+.cfg-note{font-size:11px;color:var(--mu);margin-top:8px;line-height:1.5}
+.cfg-note a{color:var(--ac)}
+.cfg-status{font-size:11px;margin-top:8px;padding:6px 8px;border-radius:6px;display:none}
+.cfg-status.show{display:block}
+.cfg-status.ok{background:var(--ac2);color:var(--ok)}
+.cfg-status.err{background:var(--ac2);color:var(--er)}
+
+/* resumen mensual */
+.resumen{background:var(--s1);border-radius:var(--r);padding:1rem;margin-bottom:1.5rem;display:none}
+.resumen.open{display:block}
+.resumen-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--s2);font-size:14px}
+.resumen-row:last-child{border:none}
+.resumen-row b{font-weight:500}
+.resumen-row span{color:var(--mu);font-size:12px}
+.resumen-cats{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.cat-pill{font-size:10px;padding:2px 7px;border-radius:10px;background:var(--s2);color:var(--mu)}
+
+/* historial por días */
+.day-group{margin-bottom:1.5rem}
+.day-label{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.day-label span{font-size:13px;font-weight:500;color:var(--tx)}
+.day-label em{font-size:12px;color:var(--mu);font-style:normal}
+
+.item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--s2)}
+.item:last-child{border:none}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.item-body{flex:1;min-width:0}
+.item-desc{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:capitalize}
+.item-meta{font-size:11px;color:var(--mu);margin-top:2px}
+.item-amount{font-size:15px;font-weight:500;flex-shrink:0}
+.item-del{background:none;border:none;cursor:pointer;color:var(--mu);padding:4px;font-size:16px;line-height:1;opacity:0;transition:opacity .15s}
+.item:hover .item-del,.item:active .item-del{opacity:1}
+
+.empty{text-align:center;color:var(--mu);font-size:14px;padding:2.5rem 0}
+
+.toast{position:fixed;bottom:calc(1.25rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:8px 16px;border-radius:20px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:99;max-width:88vw;text-align:center}
+.toast.show{opacity:1}
+
+.c-comida{background:#f59e0b}
+.c-transporte{background:#3b82f6}
+.c-compras{background:#22c55e}
+.c-salud{background:#ef4444}
+.c-servicios{background:#8b5cf6}
+.c-golosinas{background:#ec4899}
+.c-otros{background:#9ca3af}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="top-bar">
+    <button class="cfg-btn" onclick="toggleCfg()">⚙ sheets</button>
+    <div class="sync-dot" id="sync-dot" title="estado de sincronización" onclick="reconectar()"></div>
+  </div>
+
+  <div class="cfg-panel" id="cfg-panel">
+    <div class="cfg-head">
+      <span>Google Sheets</span>
+      <button class="cfg-close" onclick="toggleCfg()">×</button>
+    </div>
+    <input id="cfg-client" placeholder="Client ID (termina en .apps.googleusercontent.com)"/>
+    <input id="cfg-sheet" placeholder="ID del Google Sheet (de la URL)"/>
+    <input id="cfg-tab" placeholder="Nombre de la pestaña (ej: Gastos)"/>
+    <button class="cfg-save" onclick="saveConfig()">conectar con Google</button>
+    <div class="cfg-status" id="cfg-status"></div>
+    <p class="cfg-note">
+      El Client ID lo obtienes en <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a> → Credenciales → OAuth.<br>
+      El ID del Sheet está en la URL: docs.google.com/spreadsheets/d/<b>ESTE-PARTE</b>/edit
+    </p>
+  </div>
+
+  <div class="total">
+    <div class="total-num" id="total">S/ 0</div>
+    <div class="total-sub" id="total-sub">este mes · 0 gastos</div>
+  </div>
+
+  <button class="mes-toggle" onclick="toggleResumen()" id="mes-toggle">ver resumen mensual ▾</button>
+  <div class="resumen" id="resumen"></div>
+
+  <div class="box">
+    <div class="input-row">
+      <input id="txt" type="text" placeholder="gaste 5 lucas en una gaseosa..." autocomplete="off" autocorrect="off" spellcheck="false" onkeydown="if(event.key==='Enter')enviar()"/>
+      <button class="send-btn" onclick="enviar()">↑</button>
+    </div>
+    <div class="sub-row">
+      <button class="mic-btn" id="mic-btn" onclick="toggleMic()">
+        <span class="mic-dot"></span>
+        <span id="mic-label">hablar</span>
+      </button>
+      <span class="hint">dilo como quieras</span>
+    </div>
+    <div class="ai-row" id="ai-row">interpretando…</div>
+  </div>
+
+  <div id="feed"><div class="empty">registra tu primer gasto</div></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://accounts.google.com/gsi/client"></script>
+<script>
+const CLAUDE = 'https://api.anthropic.com/v1/messages';
+const SCOPES  = 'https://www.googleapis.com/auth/spreadsheets';
+// margen de seguridad: renovar el token 5 min antes de que expire
+const RENEW_MARGIN_MS = 5 * 60 * 1000;
+
+let cfg     = JSON.parse(localStorage.getItem('gcfg') || '{}');
+let gastos  = JSON.parse(localStorage.getItem('gastos') || '[]');
+let gtoken  = localStorage.getItem('gtoken') || null;
+let gexp    = parseInt(localStorage.getItem('gexp') || '0', 10);
+let mic     = null;
+let grabando = false;
+let resumenOpen = false;
+let renewTimer = null;
+
+// ── INIT ─────────────────────────────────────────────────────────────────
+let tokenClient = null;
+
+function init() {
+  loadCfgUI();
+  render();
+
+  if (cfg.clientId) {
+    initTokenClient();
+    if (gtoken && gexp > Date.now() + RENEW_MARGIN_MS) {
+      setSyncOk();
+    } else if (gtoken) {
+      // token vencido o por vencer: renovar en silencio, sin pedirle nada al usuario
+      renovarSilencioso();
+    } else {
+      setSyncErr();
+    }
+  }
+
+  scheduleRenew();
+
+  // si la app vuelve a primer plano y el token ya venció, renovar solo
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && cfg.clientId) {
+      if (!gtoken || gexp <= Date.now() + RENEW_MARGIN_MS) {
+        renovarSilencioso();
+      }
+      syncPendientes();
+    }
+  });
+}
+
+function saveToken(at, expiresIn) {
+  gtoken = at;
+  gexp = Date.now() + (parseInt(expiresIn || '3600', 10) * 1000);
+  localStorage.setItem('gtoken', gtoken);
+  localStorage.setItem('gexp', String(gexp));
+  setSyncOk();
+  scheduleRenew();
+}
+
+function scheduleRenew() {
+  if (renewTimer) clearTimeout(renewTimer);
+  if (!gtoken || !cfg.clientId) return;
+  const ms = Math.max(gexp - Date.now() - RENEW_MARGIN_MS, 10000);
+  renewTimer = setTimeout(renovarSilencioso, ms);
+}
+
+// ── TOKEN CLIENT DE GOOGLE (Google Identity Services) ──────────────────────
+// Antes esto se hacía con un <iframe oculto> apuntando directo al endpoint de
+// login de Google con prompt=none. Google ya no permite que ese endpoint se
+// cargue dentro de un iframe de otro sitio (por seguridad anti-phishing) y
+// además bloquea la cookie de sesión de Google al venir de un origen distinto
+// (third-party cookies), así que esa renovación silenciosa fallaba siempre
+// tras 8s y la app quedaba "desvinculada". El reemplazo es la librería oficial
+// accounts.google.com/gsi/client, que es el mecanismo que Google sí soporta
+// y mantiene para pedir/renovar tokens sin backend.
+function initTokenClient() {
+  if (!cfg.clientId || typeof google === 'undefined') return;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: cfg.clientId,
+    scope: SCOPES,
+    callback: (resp) => {
+      if (resp && resp.access_token) {
+        saveToken(resp.access_token, resp.expires_in);
+        toast('Google Sheets conectado ✓');
+        syncPendientes();
+      } else {
+        setSyncErr();
+      }
+    },
+    error_callback: () => {
+      // el usuario cerró el popup, o Google no pudo renovar en silencio
+      setSyncErr();
+    },
+  });
+}
+
+// ── RENOVACIÓN SILENCIOSA (sin pedirle nada al usuario) ────────────────────
+function renovarSilencioso() {
+  if (!cfg.clientId) return;
+  if (!tokenClient) initTokenClient();
+  if (!tokenClient) { setSyncErr(); return; }
+  setSyncSpin();
+  tokenClient.requestAccessToken({ prompt: '' });
+}
+
+function reconectar() {
+  // click manual en el punto: si está roja, intenta primero en silencio y si falla pide login completo
+  if (!cfg.clientId) { toggleCfg(); return; }
+  setSyncSpin();
+  renovarSilencioso();
+  setTimeout(() => { if (!gtoken || gexp <= Date.now()) loginGoogle(); }, 9000);
+}
+
+// ── CONFIG ───────────────────────────────────────────────────────────────
+function toggleCfg() {
+  document.getElementById('cfg-panel').classList.toggle('open');
+}
+function loadCfgUI() {
+  document.getElementById('cfg-client').value = cfg.clientId || '';
+  document.getElementById('cfg-sheet').value  = cfg.sheetId  || '';
+  document.getElementById('cfg-tab').value    = cfg.tab      || 'Gastos';
+}
+function saveConfig() {
+  cfg = {
+    clientId: document.getElementById('cfg-client').value.trim(),
+    sheetId:  document.getElementById('cfg-sheet').value.trim(),
+    tab:      document.getElementById('cfg-tab').value.trim() || 'Gastos',
+  };
+  if (!cfg.clientId || !cfg.sheetId) { cfgStatus('faltan datos', 'err'); return; }
+  localStorage.setItem('gcfg', JSON.stringify(cfg));
+  toggleCfg();
+  initTokenClient();
+  loginGoogle();
+}
+function cfgStatus(msg, kind) {
+  const el = document.getElementById('cfg-status');
+  el.textContent = msg;
+  el.className = 'cfg-status show ' + kind;
+}
+function loginGoogle() {
+  if (!tokenClient) initTokenClient();
+  if (!tokenClient) { toast('Google todavía está cargando, intenta de nuevo en un segundo'); return; }
+  tokenClient.requestAccessToken({ prompt: 'consent' });
+}
+
+// ── IA: interpretar texto a gasto estructurado ──────────────────────────
+// Diccionario de slang -> categoría, para reforzar lo que dice la IA
+const SLANG_CAT = {
+  cuates: 'golosinas', golosina: 'golosinas', golosinas: 'golosinas',
+  chocolate: 'golosinas', galleta: 'golosinas', caramelo: 'golosinas', dulce: 'golosinas',
+  pasaje: 'transporte', combi: 'transporte', taxi: 'transporte', uber: 'transporte', bus: 'transporte', mototaxi: 'transporte',
+  menu: 'comida', almuerzo: 'comida', cena: 'comida', desayuno: 'comida',
+  jabon: 'compras', pañal: 'compras', papel: 'compras',
+};
+
+async function interpretar(texto) {
+  const res = await fetch(CLAUDE, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 150,
+      messages: [{role:'user', content:
+`Eres un parser de gastos informales en español peruano. Te paso un texto suelto y devuelves SOLO un JSON, sin markdown, sin explicación.
+
+Reglas de dinero:
+- "lucas" o "soles" o "sol" o "so" = soles (S/.)
+- "palo" = 100 soles
+- "kilo" = 1000 soles
+- si menciona "propina" además del gasto principal, ignórala (solo registra el gasto principal)
+- si no hay monto claro, pon monto: 0
+
+Reglas de DESCRIPCIÓN (desc): debe ser SOLO el nombre del producto o servicio, en 1-3 palabras, SIN el monto, SIN la moneda, SIN palabras de relleno ("gasté", "en", "so", "soles", "lucas", etc). Ejemplos:
+- "5 so cuates" -> desc: "cuates"
+- "gaste 5 lucas en una gaseosa" -> desc: "gaseosa"
+- "10 soles menú" -> desc: "menú"
+- "pasaje 2 soles" -> desc: "pasaje"
+
+Reglas de CATEGORÍA (cat), elige UNA de: comida, transporte, compras, salud, servicios, golosinas, otros.
+- snacks/dulces/chocolates/galletas/caramelos -> golosinas
+- pasajes, combi, taxi, uber, mototaxi -> transporte
+- comidas preparadas (menú, almuerzo, cena, desayuno) -> comida
+- productos de limpieza/higiene/hogar (jabón, pañales, papel) -> compras
+- si no calza claro en ninguna, usa "otros"
+
+Texto: "${texto}"
+
+Responde solo: {"desc":"nombre corto","monto":0.0,"cat":"categoria"}`
+      }]
+    })
+  });
+  const d = await res.json();
+  const parsed = JSON.parse(d.content[0].text.replace(/```json|```/g,'').trim());
+
+  // refuerzo local: si alguna palabra del texto original matchea el diccionario
+  // de slang y la IA puso "otros", la corregimos
+  if (parsed.cat === 'otros') {
+    const palabras = texto.toLowerCase().split(/\s+/);
+    for (const w of palabras) {
+      if (SLANG_CAT[w]) { parsed.cat = SLANG_CAT[w]; break; }
+    }
+  }
+  if (parsed.desc) parsed.desc = parsed.desc.trim().toLowerCase();
+  return parsed;
+}
+
+// ── REGISTRAR ────────────────────────────────────────────────────────────
+async function enviar() {
+  const txt = document.getElementById('txt').value.trim();
+  if (!txt) return;
+  document.getElementById('txt').value = '';
+  document.getElementById('ai-row').style.display = 'flex';
+
+  try {
+    const p = await interpretar(txt);
+    if (!p.monto || p.monto <= 0) {
+      toast('no entendí el monto, intenta de nuevo');
+      document.getElementById('ai-row').style.display = 'none';
+      return;
+    }
+
+    const ahora = new Date();
+    const g = {
+      id:     Date.now(),
+      desc:   p.desc,
+      monto:  parseFloat(p.monto.toFixed(2)),
+      cat:    p.cat || 'otros',
+      fecha:  ahora.toLocaleDateString('es-PE',{day:'2-digit',month:'2-digit',year:'numeric'}),
+      hora:   ahora.toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}),
+      ts:     ahora.toISOString(),
+      raw:    txt,
+      synced: false
+    };
+
+    gastos.unshift(g);
+    localStorage.setItem('gastos', JSON.stringify(gastos));
+    render();
+    toast(`S/ ${g.monto.toFixed(2)} · ${g.desc}`);
+
+    if (gtoken && gexp > Date.now()) await appendSheet(g);
+    else if (cfg.clientId) { renovarSilencioso(); }
+
+  } catch(e) {
+    toast('algo falló, guardado local');
+  }
+  document.getElementById('ai-row').style.display = 'none';
+}
+
+// ── GOOGLE SHEETS ────────────────────────────────────────────────────────
+async function appendSheet(g) {
+  if (!gtoken || !cfg.sheetId) return;
+  setSyncSpin();
+  try {
+    const range = encodeURIComponent(`${cfg.tab}!A:F`);
+    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {Authorization:`Bearer ${gtoken}`,'Content-Type':'application/json'},
+      body: JSON.stringify({ values: [[g.fecha, g.hora, g.desc, g.monto, g.cat, g.raw]] })
+    });
+    if (resp.status === 401) {
+      // token inválido/vencido: renovar en silencio y reintentar una vez
+      gtoken = null; gexp = 0;
+      localStorage.removeItem('gtoken'); localStorage.removeItem('gexp');
+      renovarSilencioso();
+      setTimeout(() => { if (gtoken) appendSheet(g); }, 9000);
+      return;
+    }
+    g.synced = true;
+    localStorage.setItem('gastos', JSON.stringify(gastos));
+    setSyncOk();
+
+    const d = new Date(g.ts);
+    updateResumenSheet(d.getFullYear(), d.getMonth());
+  } catch(e) {
+    setSyncErr();
+  }
+}
+
+async function syncPendientes() {
+  const pending = gastos.filter(g => !g.synced);
+  for (const g of pending) await appendSheet(g);
+  if (pending.length) toast(`${pending.length} pendientes sincronizados`);
+}
+
+// ── RESUMEN EN EL SHEET (pestaña "Resumen", una fila por mes) ───────────
+const RESUMEN_CATS = ['comida','transporte','compras','salud','servicios','golosinas','otros'];
+const RESUMEN_HEADER = ['Mes','Comida','Transporte','Compras','Salud','Servicios','Golosinas','Otros','Total','N° gastos'];
+
+function computeMonthTotals(year, month) {
+  const t = { comida:0, transporte:0, compras:0, salud:0, servicios:0, golosinas:0, otros:0, total:0, n:0 };
+  gastos.forEach(g => {
+    const d = new Date(g.ts);
+    if (d.getFullYear() === year && d.getMonth() === month) {
+      const cat = RESUMEN_CATS.includes(g.cat) ? g.cat : 'otros';
+      t[cat] += g.monto;
+      t.total += g.monto;
+      t.n += 1;
+    }
+  });
+  return t;
+}
+
+async function ensureResumenTab() {
+  try {
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: { Authorization:`Bearer ${gtoken}`, 'Content-Type':'application/json' },
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: 'Resumen' } } }] })
+    });
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/Resumen!A1:J1?valueInputOption=USER_ENTERED`, {
+      method: 'PUT',
+      headers: { Authorization:`Bearer ${gtoken}`, 'Content-Type':'application/json' },
+      body: JSON.stringify({ values: [RESUMEN_HEADER] })
+    });
+  } catch(e) { /* la pestaña ya existía, no pasa nada */ }
+}
+
+async function updateResumenSheet(year, month) {
+  if (!gtoken || !cfg.sheetId) return;
+  const d = new Date(year, month, 1);
+  const label = `${String(month+1).padStart(2,'0')}/${year}`;
+  const totals = computeMonthTotals(year, month);
+  const vals = [
+    label,
+    totals.comida.toFixed(2), totals.transporte.toFixed(2), totals.compras.toFixed(2),
+    totals.salud.toFixed(2), totals.servicios.toFixed(2), totals.golosinas.toFixed(2),
+    totals.otros.toFixed(2), totals.total.toFixed(2), totals.n
+  ];
+  try {
+    let getRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/Resumen!A:A`, {
+      headers: { Authorization:`Bearer ${gtoken}` }
+    });
+    if (getRes.status === 400 || getRes.status === 404) {
+      await ensureResumenTab();
+      getRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/Resumen!A:A`, {
+        headers: { Authorization:`Bearer ${gtoken}` }
+      });
+    }
+    const data = await getRes.json();
+    const rows = data.values || [];
+    const rowIndex = rows.findIndex(r => r[0] === label);
+
+    if (rowIndex > 0) {
+      const range = `Resumen!A${rowIndex+1}:J${rowIndex+1}`;
+      await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/${range}?valueInputOption=USER_ENTERED`, {
+        method: 'PUT',
+        headers: { Authorization:`Bearer ${gtoken}`, 'Content-Type':'application/json' },
+        body: JSON.stringify({ values: [vals] })
+      });
+    } else {
+      if (!rows.length) await ensureResumenTab();
+      await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/Resumen!A:J:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+        method: 'POST',
+        headers: { Authorization:`Bearer ${gtoken}`, 'Content-Type':'application/json' },
+        body: JSON.stringify({ values: [vals] })
+      });
+    }
+  } catch(e) { /* no bloqueamos el registro del gasto si esto falla */ }
+}
+
+// ── RESUMEN MENSUAL ──────────────────────────────────────────────────────
+function toggleResumen() {
+  resumenOpen = !resumenOpen;
+  document.getElementById('resumen').classList.toggle('open', resumenOpen);
+  document.getElementById('mes-toggle').textContent = resumenOpen ? 'ocultar resumen ▴' : 'ver resumen mensual ▾';
+  if (resumenOpen) renderResumen();
+}
+
+function renderResumen() {
+  const porMes = {};
+  gastos.forEach(g => {
+    const d = new Date(g.ts);
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    if (!porMes[key]) porMes[key] = { total: 0, n: 0, cats: {} };
+    porMes[key].total += g.monto;
+    porMes[key].n += 1;
+    porMes[key].cats[g.cat] = (porMes[key].cats[g.cat] || 0) + g.monto;
+  });
+
+  const meses = Object.keys(porMes).sort().reverse();
+  const nombres = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+  if (!meses.length) {
+    document.getElementById('resumen').innerHTML = '<div class="empty" style="padding:1rem 0">sin datos aún</div>';
+    return;
+  }
+
+  document.getElementById('resumen').innerHTML = meses.map(key => {
+    const [y, m] = key.split('-');
+    const info = porMes[key];
+    const catsTop = Object.entries(info.cats)
+      .sort((a,b) => b[1]-a[1])
+      .map(([cat, monto]) => `<span class="cat-pill">${cat} S/${monto.toFixed(0)}</span>`)
+      .join('');
+    return `<div class="resumen-row" style="flex-direction:column;align-items:stretch">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b>${nombres[parseInt(m,10)-1]} ${y}</b>
+        <span>S/ ${info.total.toFixed(2)} · ${info.n} gastos</span>
+      </div>
+      <div class="resumen-cats">${catsTop}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── RENDER ───────────────────────────────────────────────────────────────
+function render() {
+  const now = new Date();
+  const mes = gastos.filter(g => {
+    const d = new Date(g.ts);
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  });
+  const total = mes.reduce((s,g) => s + g.monto, 0);
+  document.getElementById('total').textContent = `S/ ${total.toFixed(2)}`;
+  document.getElementById('total-sub').textContent = `este mes · ${mes.length} gasto${mes.length!==1?'s':''}`;
+
+  if (resumenOpen) renderResumen();
+
+  const feed = document.getElementById('feed');
+  if (!gastos.length) {
+    feed.innerHTML = '<div class="empty">registra tu primer gasto</div>';
+    return;
+  }
+
+  const grupos = {};
+  gastos.forEach(g => {
+    if (!grupos[g.fecha]) grupos[g.fecha] = [];
+    grupos[g.fecha].push(g);
+  });
+
+  const hoy   = now.toLocaleDateString('es-PE',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const ayer  = new Date(now - 86400000).toLocaleDateString('es-PE',{day:'2-digit',month:'2-digit',year:'numeric'});
+
+  feed.innerHTML = Object.keys(grupos).slice(0, 15).map(fecha => {
+    const items  = grupos[fecha];
+    const subtot = items.reduce((s,g) => s + g.monto, 0);
+    const label  = fecha === hoy ? 'hoy' : fecha === ayer ? 'ayer' : fecha;
+
+    const rows = items.map(g =>
+      `<div class="item">
+        <div class="dot c-${g.cat}"></div>
+        <div class="item-body">
+          <div class="item-desc">${g.desc}</div>
+          <div class="item-meta">${g.hora} · ${g.cat}${g.synced ? '' : ' · pendiente'}</div>
+        </div>
+        <div class="item-amount">S/ ${g.monto.toFixed(2)}</div>
+        <button class="item-del" onclick="borrar(${g.id})">×</button>
+      </div>`
+    ).join('');
+
+    return `<div class="day-group">
+      <div class="day-label">
+        <span>${label}</span>
+        <em>S/ ${subtot.toFixed(2)}</em>
+      </div>
+      ${rows}
+    </div>`;
+  }).join('');
+}
+
+function borrar(id) {
+  gastos = gastos.filter(g => g.id !== id);
+  localStorage.setItem('gastos', JSON.stringify(gastos));
+  render();
+}
+
+// ── MIC ──────────────────────────────────────────────────────────────────
+function toggleMic() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    toast('usa Chrome para voz'); return;
+  }
+  if (grabando) { mic && mic.stop(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  mic = new SR();
+  mic.lang = 'es-PE';
+  mic.interimResults = false;
+  mic.onstart  = () => { grabando = true;  document.getElementById('mic-btn').classList.add('on'); document.getElementById('mic-label').textContent = 'escuchando…'; };
+  mic.onresult = e  => { document.getElementById('txt').value = e.results[0][0].transcript; enviar(); };
+  mic.onend    = () => { grabando = false; document.getElementById('mic-btn').classList.remove('on'); document.getElementById('mic-label').textContent = 'hablar'; };
+  mic.onerror  = () => { grabando = false; document.getElementById('mic-btn').classList.remove('on'); document.getElementById('mic-label').textContent = 'hablar'; };
+  mic.start();
+}
+
+// ── SYNC STATUS ───────────────────────────────────────────────────────────
+function setSyncOk()   { const d = document.getElementById('sync-dot'); d.className='sync-dot ok';   d.title='sincronizado'; }
+function setSyncErr()  { const d = document.getElementById('sync-dot'); d.className='sync-dot err';  d.title='sin conectar · toca para reintentar'; }
+function setSyncSpin() { const d = document.getElementById('sync-dot'); d.className='sync-dot spin'; d.title='sincronizando…'; }
+
+// ── TOAST ─────────────────────────────────────────────────────────────────
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+init();
+</script>
+<script>if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{})</script>
+</body>
+</html>
