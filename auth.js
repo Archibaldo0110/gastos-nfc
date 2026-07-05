@@ -65,12 +65,29 @@ async function getValidToken() {
 }
 
 // Si el usuario ya tiene hoja creada en ESTE dispositivo, la reusa.
-// Si no, crea una hoja nueva en el Drive del usuario que inicio sesion.
+// Si no, BUSCA en su Drive si ya existe una hoja "GastosNFC" (por si cerro
+// sesion y volvio a entrar). Solo si de verdad no existe, crea una nueva.
 async function getOrCreateSheet() {
   let sheetId = localStorage.getItem('gastosnfc_sheet_id');
   if (sheetId) return sheetId;
 
   const token = await getValidToken();
+
+  // Buscar hoja existente antes de crear una nueva
+  const query = encodeURIComponent(
+    "name='GastosNFC' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+  );
+  const searchRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`,
+    { headers: { 'Authorization': 'Bearer ' + token } }
+  );
+  const searchData = await searchRes.json();
+
+  if (searchData.files && searchData.files.length > 0) {
+    sheetId = searchData.files[0].id;
+    localStorage.setItem('gastosnfc_sheet_id', sheetId);
+    return sheetId;
+  }
 
   const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
     method: 'POST',
