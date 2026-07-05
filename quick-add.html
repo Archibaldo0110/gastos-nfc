@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Quick Add - GastosNFC</title>
+<script src="https://accounts.google.com/gsi/client"></script>
+<script src="auth.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1115;
+    color: #e8e8e8;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .screen {
+    width: 100%;
+    max-width: 420px;
+    height: 100vh;
+    display: none;
+    flex-direction: column;
+    padding: 24px;
+  }
+  .screen.active { display: flex; }
+
+  /* ---------- LOGIN ---------- */
+  #screenLogin { justify-content: center; align-items: center; text-align: center; }
+  #screenLogin h1 { font-size: 22px; margin-bottom: 8px; }
+  #screenLogin p { color: #9aa0ab; font-size: 14px; margin-bottom: 32px; }
+  .btn-google {
+    background: #fff; color: #1f1f1f; border: none; border-radius: 12px;
+    padding: 14px 20px; font-size: 15px; font-weight: 600; cursor: pointer;
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  /* ---------- MONTO ---------- */
+  #screenMonto { justify-content: center; align-items: center; text-align: center; }
+  .label-monto { color: #9aa0ab; font-size: 15px; margin-bottom: 12px; }
+  .monto-display { font-size: 56px; font-weight: 700; color: #fff; margin-bottom: 40px; min-height: 70px; }
+  .monto-display span.sol { color: #4f8cff; font-size: 32px; margin-right: 6px; }
+  input#montoInput { position: absolute; opacity: 0; pointer-events: none; }
+  .btn-siguiente { width: 100%; padding: 16px; border: none; border-radius: 14px; background: #34c759; color: #fff; font-size: 17px; font-weight: 700; cursor: pointer; }
+  .btn-siguiente:disabled { background: #2a2f38; color: #666; }
+  .toque-hint { color: #565c66; font-size: 13px; margin-top: 14px; }
+  .btn-logout { position: fixed; top: 16px; right: 16px; background: none; border: none; color: #565c66; font-size: 12px; cursor: pointer; }
+
+  /* ---------- CATEGORIAS ---------- */
+  #screenCategoria { justify-content: flex-start; }
+  .top-bar { display: flex; align-items: center; margin-bottom: 24px; }
+  .btn-back { background: none; border: none; color: #4f8cff; font-size: 16px; cursor: pointer; padding: 6px 10px 6px 0; }
+  .monto-resumen { font-size: 20px; font-weight: 700; color: #fff; margin-left: 8px; }
+  .titulo-cat { font-size: 15px; color: #9aa0ab; margin-bottom: 16px; }
+  .grid-categorias { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .cat-btn { background: #1a1d24; border: 1px solid #2c3038; border-radius: 16px; padding: 20px 10px; display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: pointer; color: #fff; font-size: 14px; font-weight: 600; }
+  .cat-btn:active { background: #23262e; border-color: #4f8cff; }
+  .cat-icon { font-size: 30px; }
+
+  #toast { position: fixed; bottom: 24px; left: 24px; right: 24px; max-width: 372px; margin: 0 auto; padding: 14px; border-radius: 12px; font-size: 14px; text-align: center; display: none; z-index: 10; }
+  #toast.ok { background: #1e3a2a; color: #7ee0a0; display: block; }
+  #toast.error { background: #3a1e1e; color: #ff8080; display: block; }
+  #toast.loading { background: #1a1d24; color: #9aa0ab; display: block; }
+</style>
+</head>
+<body>
+
+<button class="btn-logout" id="btnLogout" onclick="cerrarSesion()" style="display:none;">Cerrar sesión</button>
+
+<!-- LOGIN -->
+<div class="screen active" id="screenLogin">
+  <h1>💰 GastosNFC</h1>
+  <p>Inicia sesión para crear tu hoja personal de gastos</p>
+  <button class="btn-google" onclick="signIn()">Iniciar sesión con Google</button>
+</div>
+
+<!-- MONTO -->
+<div class="screen" id="screenMonto">
+  <div class="label-monto">¿Cuánto gastaste?</div>
+  <div class="monto-display"><span class="sol">S/</span><span id="montoTexto">0</span></div>
+  <input type="number" id="montoInput" inputmode="decimal" step="0.01">
+  <button class="btn-siguiente" id="btnSiguiente" disabled onclick="irACategoria()">Siguiente</button>
+  <div class="toque-hint">Toca el monto para escribir con el teclado</div>
+</div>
+
+<!-- CATEGORIA -->
+<div class="screen" id="screenCategoria">
+  <div class="top-bar">
+    <button class="btn-back" onclick="volverAMonto()">← Atrás</button>
+    <span class="monto-resumen" id="montoResumen">S/ 0</span>
+  </div>
+  <div class="titulo-cat">Elige una categoría</div>
+  <div class="grid-categorias">
+    <button class="cat-btn" onclick="guardarGastoUI('Comida')"><span class="cat-icon">🍔</span>Comida</button>
+    <button class="cat-btn" onclick="guardarGastoUI('Transporte')"><span class="cat-icon">🚕</span>Transporte</button>
+    <button class="cat-btn" onclick="guardarGastoUI('Ocio')"><span class="cat-icon">🎮</span>Ocio</button>
+    <button class="cat-btn" onclick="guardarGastoUI('Compras')"><span class="cat-icon">🛍️</span>Compras</button>
+    <button class="cat-btn" onclick="guardarGastoUI('Útiles')"><span class="cat-icon">🧰</span>Útiles</button>
+    <button class="cat-btn" onclick="guardarGastoUI('Servicios')"><span class="cat-icon">💡</span>Pagos / Servicios</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const montoInput = document.getElementById('montoInput');
+  const montoTexto = document.getElementById('montoTexto');
+  const btnSiguiente = document.getElementById('btnSiguiente');
+
+  function mostrarPantalla(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  function mostrarToast(mensaje, tipo) {
+    const toast = document.getElementById('toast');
+    toast.textContent = mensaje;
+    toast.className = tipo;
+    if (!mensaje) toast.style.display = 'none';
+  }
+
+  // ---------- INICIO: revisa si ya habia sesion en este celular ----------
+  window.addEventListener('load', () => {
+    initGoogleAuth(() => {
+      // se ejecuta despues de un login (o renovacion) exitoso
+      document.getElementById('btnLogout').style.display = 'block';
+      mostrarPantalla('screenMonto');
+    });
+
+    if (hasAccountOnThisDevice()) {
+      document.getElementById('btnLogout').style.display = 'block';
+      mostrarPantalla('screenMonto');
+    }
+  });
+
+  function cerrarSesion() {
+    signOut();
+    document.getElementById('btnLogout').style.display = 'none';
+    mostrarPantalla('screenLogin');
+  }
+
+  // ---------- Pantalla monto ----------
+  document.querySelector('.monto-display').addEventListener('click', () => {
+    montoInput.focus();
+  });
+
+  montoInput.addEventListener('input', () => {
+    const val = montoInput.value;
+    montoTexto.textContent = val ? val : '0';
+    btnSiguiente.disabled = !val || parseFloat(val) <= 0;
+  });
+
+  function irACategoria() {
+    const monto = parseFloat(montoInput.value);
+    if (!monto || monto <= 0) return;
+    document.getElementById('montoResumen').textContent = 'S/ ' + monto.toFixed(2);
+    mostrarPantalla('screenCategoria');
+  }
+
+  function volverAMonto() {
+    mostrarPantalla('screenMonto');
+  }
+
+  // ---------- Guardar gasto (usa la hoja PERSONAL del usuario logueado) ----------
+  async function guardarGastoUI(categoria) {
+    const monto = parseFloat(montoInput.value);
+    if (!monto || monto <= 0) {
+      mostrarToast('⚠️ Monto inválido', 'error');
+      return;
+    }
+
+    mostrarToast('Guardando...', 'loading');
+
+    try {
+      await appendGasto(monto, categoria);
+      mostrarToast('✅ Guardado: S/ ' + monto.toFixed(2) + ' en ' + categoria, 'ok');
+      setTimeout(() => {
+        montoInput.value = '';
+        montoTexto.textContent = '0';
+        btnSiguiente.disabled = true;
+        mostrarToast('', '');
+        mostrarPantalla('screenMonto');
+      }, 1400);
+    } catch (err) {
+      mostrarToast('❌ ' + err.message, 'error');
+    }
+  }
+</script>
+
+</body>
+</html>
