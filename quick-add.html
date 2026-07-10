@@ -334,6 +334,7 @@ function hasAccountOnThisDevice() {
   <h1>💰 GastosNFC</h1>
   <p>Inicia sesión para crear tu hoja personal de gastos</p>
   <button class="btn-google" onclick="signIn()">Iniciar sesión con Google</button>
+  <button class="btn-resumen" id="btnReintentar" style="display:none;margin-top:14px" onclick="iniciarConexionGoogle()">🔄 Reintentar conexión</button>
 </div>
 
 <div class="screen" id="screenMonto">
@@ -443,6 +444,57 @@ function hasAccountOnThisDevice() {
       </button>`).join('');
   }
 
+  // Espera a que la librería de Google (accounts.google.com/gsi/client)
+  // termine de cargar antes de usarla. Antes se asumía que ya estaba lista
+  // apenas disparaba el evento 'load' de la página, pero con internet lento
+  // eso no siempre es cierto todavía, y tronaba con "google is not defined".
+  function esperarGoogleListo(intentos) {
+    if (intentos === undefined) intentos = 20; // ~10 segundos en total
+    return new Promise((resolve, reject) => {
+      function check(n) {
+        if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+          resolve();
+        } else if (n <= 0) {
+          reject(new Error('No se pudo conectar con Google. Revisa tu internet y toca "Reintentar".'));
+        } else {
+          setTimeout(() => check(n - 1), 500);
+        }
+      }
+      check(intentos);
+    });
+  }
+
+  function iniciarConexionGoogle() {
+    esperarGoogleListo().then(() => {
+      try {
+        initGoogleAuth(() => {
+          document.getElementById('btnLogout').style.display = 'block';
+          mostrarPantalla('screenMonto');
+          asegurarResumen().then(actualizarResumenUI).catch(err => {
+            mostrarToast('⚠️ resumen: ' + err.message, 'error');
+            setTimeout(() => mostrarToast('', ''), 5000);
+          });
+        });
+
+        if (hasAccountOnThisDevice()) {
+          document.getElementById('btnLogout').style.display = 'block';
+          mostrarPantalla('screenMonto');
+          asegurarResumen().then(actualizarResumenUI).catch(err => {
+            mostrarToast('⚠️ resumen: ' + err.message, 'error');
+            setTimeout(() => mostrarToast('', ''), 5000);
+          });
+        }
+        document.getElementById('btnReintentar').style.display = 'none';
+      } catch (e) {
+        mostrarToast('⚠️ ' + e.message, 'error');
+        document.getElementById('btnReintentar').style.display = 'block';
+      }
+    }).catch(e => {
+      mostrarToast('⚠️ ' + e.message, 'error');
+      document.getElementById('btnReintentar').style.display = 'block';
+    });
+  }
+
   window.addEventListener('load', () => {
     try { construirGridCategorias(); } catch (e) { console.error('grid categorias:', e); }
     try { construirListaLimites(); } catch (e) { console.error('lista limites:', e); }
@@ -453,27 +505,7 @@ function hasAccountOnThisDevice() {
       }
     } catch (e) { console.error('notification permission:', e); }
 
-    try {
-      initGoogleAuth(() => {
-        document.getElementById('btnLogout').style.display = 'block';
-        mostrarPantalla('screenMonto');
-        asegurarResumen().then(actualizarResumenUI).catch(err => {
-          mostrarToast('⚠️ resumen: ' + err.message, 'error');
-          setTimeout(() => mostrarToast('', ''), 5000);
-        });
-      });
-    } catch (e) { console.error('initGoogleAuth:', e); }
-
-    try {
-      if (hasAccountOnThisDevice()) {
-        document.getElementById('btnLogout').style.display = 'block';
-        mostrarPantalla('screenMonto');
-        asegurarResumen().then(actualizarResumenUI).catch(err => {
-          mostrarToast('⚠️ resumen: ' + err.message, 'error');
-          setTimeout(() => mostrarToast('', ''), 5000);
-        });
-      }
-    } catch (e) { console.error('hasAccountOnThisDevice:', e); }
+    iniciarConexionGoogle();
   });
 
   function cerrarSesion() {
