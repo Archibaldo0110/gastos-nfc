@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gastos">
+<link rel="manifest" href="manifest.json">
+<title>Quick Add - GastosNFC</title>
+<script>
+// Autolimpieza: elimina cualquier service worker/caché vieja que haya
+// quedado activa desde index.html (el service worker cubre todo el
+// dominio, no solo la página que lo registró).
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+}
+if (window.caches) {
+  caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+}
+</script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// ===== GastosNFC - Autenticacion, hoja personal y resumen por usuario =====
+// (antes vivía en auth.js aparte; se metió aquí directo porque el archivo
+// externo estaba fallando en cargar en algunos celulares, rompiendo TODA
+// la app ya que dependía de él. Así, si esta página carga, esto carga con ella.)
+const CLIENT_ID = "142369544324-r9o5p863jqrjm30cf39f0hjib677ru5u.apps.googleusercontent.com";
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file";
+const CATEGORIAS = ["Comida", "Golosinas", "Transporte", "Ocio", "Juegos", "Herramientas", "Compras", "Ropa", "Higiene", "Hogar", "Útiles", "Servicios"];
+
+let tokenClient = null;
+let accessToken = null;
+let tokenExpiry = 0;
+
+function initGoogleAuth(onTokenReady) {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp) => {
+      if (resp.error) {
+        console.error("Error de login:", resp);
+        return;
+      }
+      accessToken = resp.access_token;
+      tokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+      localStorage.setItem('gastosnfc_token', accessToken);
+      localStorage.setItem('gastosnfc_token_expiry', String(tokenExpiry));
+      onTokenReady();
+    }
+  });
+
+  if (hasAccountOnThisDevice()) {
+    getValidToken().catch(() => {});
+  }
+}
+
+function signIn() {
+  tokenClient.requestAccessToken({ prompt: 'consent' });
+}
+
+function signOut() {
+  localStorage.removeItem('gastosnfc_token');
+  localStorage.removeItem('gastosnfc_token_expiry');
+  localStorage.removeItem('gastosnfc_sheet_id');
+  localStorage.removeItem('gastosnfc_resumen_ready_v3');
+  accessToken = null;
+  tokenExpiry = 0;
+}
+
+async function getValidToken() {
+  const storedExpiry = parseInt(localStorage.getItem('gastosnfc_token_expiry') || '0');
+
+  if (accessToken && Date.now() < tokenExpiry) return accessToken;
+
+  if (Date.now() < storedExpiry) {
+    accessToken = localStorage.getItem('gastosnfc_token');
+    tokenExpiry = storedExpiry;
+    return accessToken;
+  }
+
+  return new Promise((resolve, reject) => {
+    tokenClient.callback = (resp) => {
+      if (resp.error) { reject(resp); return; }
+      accessToken = resp.access_token;
+      tokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+      localStorage.setItem('gastosnfc_token', accessToken);
+      localStorage.setItem('gastosnfc_token_expiry', String(tokenExpiry));
+      resolve(accessToken);
+    };
+    tokenClient.requestAccessToken({ prompt: '' });
+  });
+}
+
+async function getOrCreateSheet() {
+  let sheetId = localStorage.getItem('gastosnfc_sheet_id');
+  if (sheetId) return sheetId;
+
+  const token = await getValidToken();
+
+  const query = encodeURIComponent(
+    "name='GastosNFC' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+  );
+  const searchRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`,
+    { headers: { 'Authorization': 'Bearer ' + token } }
+  );
+  const searchData = await searchRes.json();
+
+  if (searchData.files && searchData.files.length > 0) {
+    sheetId = searchData.files[0].id;
+    localStorage.setItem('gastosnfc_sheet_id', sheetId);
+    return sheetId;
+  }
+
+  const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      properties: { title: 'GastosNFC' },
+      sheets: [
+        { properties: { title: 'Gastos' } },
+        { properties: { title: 'Resumen' } }
+      ]
+    })
+  });
+
+  const created = await createRes.json();
+  if (!created.spreadsheetId) {
+    throw new Error('No se pudo crear la hoja: ' + JSON.stringify(created));
+  }
+  sheetId = created.spreadsheetId;
+
+  await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Gastos!A1:E1?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: [["Fecha", "Hora", "Monto", "Categoria", "Mes"]] })
+    }
+  );
+
+  await escribirFormulasResumen(sheetId, token);
+  localStorage.setItem('gastosnfc_sheet_id', sheetId);
+  localStorage.setItem('gastosnfc_resumen_ready_v3', '1');
+  return sheetId;
+}
+
+async function escribirFormulasResumen(sheetId, token) {
+  const filasCategoria = CATEGORIAS.map((cat, i) => {
+    const fila = 6 + i;
+    return [
+      cat,
+      `=SUMIFS(Gastos!C:C,Gastos!D:D,"${cat}",Gastos!E:E,TEXT(TODAY(),"YYYY-MM"))`
+    ];
+  });
+  const ultimaFilaCat = 5 + CATEGORIAS.length;
+
+  const values = [
+    ["RESUMEN DE GASTOS", ""],
+    ["", ""],
+    ["Mes actual:", "=TEXT(TODAY(),\"mmmm yyyy\")"],
+    ["", ""],
+    ["Categoría", "Total del mes (S/)"],
+    ...filasCategoria,
+    ["", ""],
+    ["TOTAL DEL MES", `=SUM(B6:B${ultimaFilaCat})`],
+    ["TOTAL GENERAL (todo el historial)", "=SUM(Gastos!C:C)"]
+  ];
+
+  await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Resumen!A1:B${values.length}?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values })
+    }
+  );
+}
+
+async function asegurarResumen() {
+  if (localStorage.getItem('gastosnfc_resumen_ready_v3')) return;
+
+  const token = await getValidToken();
+  const sheetId = await getOrCreateSheet();
+
+  const infoRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties.title`,
+    { headers: { 'Authorization': 'Bearer ' + token } }
+  );
+  const info = await infoRes.json();
+  const tieneResumen = (info.sheets || []).some(s => s.properties.title === 'Resumen');
+
+  if (!tieneResumen) {
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: 'Resumen' } } }] })
+    });
+  }
+
+  await escribirFormulasResumen(sheetId, token);
+  localStorage.setItem('gastosnfc_resumen_ready_v3', '1');
+}
+
+async function appendGasto(monto, categoria) {
+  const token = await getValidToken();
+  const sheetId = await getOrCreateSheet();
+
+  const ahora = new Date();
+  const fecha = ahora.toLocaleDateString('es-PE');
+  const hora = ahora.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+  const mes = ahora.toISOString().slice(0, 7);
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Gastos!A:E:append?valueInputOption=USER_ENTERED`,
+    {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: [[fecha, hora, monto, categoria, mes]] })
+    }
+  );
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error('Error al guardar: ' + JSON.stringify(err));
+  }
+  return res.json();
+}
+
+function urlHojaUsuario() {
+  const sheetId = localStorage.getItem('gastosnfc_sheet_id');
+  if (!sheetId) return null;
+  return `https://docs.google.com/spreadsheets/d/${sheetId}/edit#gid=0`;
+}
+
+function hasAccountOnThisDevice() {
+  return !!localStorage.getItem('gastosnfc_sheet_id') && !!localStorage.getItem('gastosnfc_token');
+}
+</script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1115;
+    color: #e8e8e8;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .screen {
+    width: 100%;
+    max-width: 420px;
+    height: 100vh;
+    display: none;
+    flex-direction: column;
+    padding: 24px;
+    overflow-y: auto;
+  }
+  .screen.active { display: flex; }
+
+  #screenLogin { justify-content: center; align-items: center; text-align: center; }
+  #screenLogin h1 { font-size: 22px; margin-bottom: 8px; }
+  #screenLogin p { color: #9aa0ab; font-size: 14px; margin-bottom: 32px; }
+  .btn-google {
+    background: #fff; color: #1f1f1f; border: none; border-radius: 12px;
+    padding: 14px 20px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+
+  #screenMonto { justify-content: flex-start; align-items: center; text-align: center; }
+
+  .resumen-mes { width: 100%; background: #1a1d24; border: 1px solid #2c3038; border-radius: 14px; padding: 12px 16px; margin-bottom: 22px; text-align: center; }
+  .resumen-mes-label { font-size: 12px; color: #9aa0ab; }
+  .resumen-mes-total { font-size: 24px; font-weight: 700; color: #fff; margin: 2px 0; }
+  .resumen-mes-rango { font-size: 11px; color: #565c66; }
+
+  .badge-cola { width: 100%; background: #3a2e1e; border: 1px solid #6b5320; color: #f0b429; border-radius: 12px; padding: 10px 14px; font-size: 12px; text-align: center; margin-bottom: 14px; cursor: pointer; }
+
+  .label-monto { color: #9aa0ab; font-size: 15px; margin-bottom: 12px; }
+  .monto-display { font-size: 52px; font-weight: 700; color: #fff; margin-bottom: 20px; min-height: 64px; }
+  .monto-display span.sol { color: #4f8cff; font-size: 30px; margin-right: 6px; }
+
+  .keypad { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+  .keypad button {
+    padding: 16px 0; font-size: 22px; font-weight: 600;
+    background: #1a1d24; border: 1px solid #2c3038; border-radius: 12px;
+    color: #fff; cursor: pointer;
+  }
+  .keypad button:active { background: #23262e; border-color: #4f8cff; }
+
+  .btn-siguiente { width: 100%; padding: 16px; border: none; border-radius: 14px; background: #34c759; color: #fff; font-size: 17px; font-weight: 700; cursor: pointer; }
+  .btn-siguiente:disabled { background: #2a2f38; color: #666; }
+  .btn-resumen {
+    width: 100%; padding: 14px; margin-top: 14px; border: 1px solid #2c3038;
+    border-radius: 14px; background: none; color: #4f8cff; font-size: 15px;
+    font-weight: 600; cursor: pointer;
+  }
+  .btn-logout { position: fixed; top: 16px; right: 16px; background: none; border: none; color: #565c66; font-size: 12px; cursor: pointer; }
+
+  #screenCategoria { justify-content: flex-start; }
+  .top-bar { display: flex; align-items: center; margin-bottom: 24px; }
+  .btn-back { background: none; border: none; color: #4f8cff; font-size: 16px; cursor: pointer; padding: 6px 10px 6px 0; }
+  .monto-resumen { font-size: 20px; font-weight: 700; color: #fff; margin-left: 8px; }
+  .titulo-cat { font-size: 15px; color: #9aa0ab; margin-bottom: 16px; }
+  .grid-categorias { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-bottom: 20px; }
+  .cat-btn { background: #1a1d24; border: 1px solid #2c3038; border-radius: 16px; padding: 20px 10px; display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: pointer; color: #fff; font-size: 14px; font-weight: 600; }
+  .cat-btn:active { background: #23262e; border-color: #4f8cff; }
+  .cat-icon { font-size: 30px; }
+
+  .cat-btn.over-limit { border-color: #ff4d4d; background: #3a1e1e; }
+  .cat-btn.over-limit .cat-icon { animation: shake .4s ease-in-out; }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-3px)} 75%{transform:translateX(3px)} }
+
+  #screenLimites { justify-content: flex-start; }
+  .limite-hint { font-size: 13px; color: #9aa0ab; margin-bottom: 16px; line-height: 1.5; }
+  .limite-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #2c3038; }
+  .limite-row label { font-size: 14px; color: #e8e8e8; display: flex; align-items: center; gap: 8px; }
+  .limite-row input { width: 90px; background: #1a1d24; border: 1px solid #2c3038; border-radius: 8px; padding: 8px; color: #fff; font-size: 14px; text-align: right; }
+
+  #toast { position: fixed; bottom: 24px; left: 24px; right: 24px; max-width: 372px; margin: 0 auto; padding: 14px; border-radius: 12px; font-size: 14px; text-align: center; display: none; z-index: 10; }
+  #toast.ok { background: #1e3a2a; color: #7ee0a0; display: block; }
+  #toast.error { background: #3a1e1e; color: #ff8080; display: block; }
+  #toast.loading { background: #1a1d24; color: #9aa0ab; display: block; }
+
+  @keyframes caer { 0%{transform:translateY(-40px) rotate(0deg); opacity:1} 100%{transform:translateY(100vh) rotate(360deg); opacity:0} }
+  .emoji-cae { position: fixed; top: 0; font-size: 26px; pointer-events: none; animation: caer 1.4s ease-in forwards; z-index: 50; }
+</style>
+</head>
+<body>
+
+<button class="btn-logout" id="btnLogout" onclick="cerrarSesion()" style="display:none;">Cerrar sesión</button>
+
+<div class="screen active" id="screenLogin">
+  <h1>💰 GastosNFC</h1>
+  <p>Inicia sesión para crear tu hoja personal de gastos</p>
+  <button class="btn-google" onclick="signIn()">Iniciar sesión con Google</button>
+  <button class="btn-resumen" id="btnReintentar" style="display:none;margin-top:14px" onclick="iniciarConexionGoogle()">🔄 Reintentar conexión</button>
+</div>
+
+<div class="screen" id="screenMonto">
+  <div class="resumen-mes">
+    <div class="resumen-mes-label">Gastado este mes</div>
+    <div class="resumen-mes-total" id="totalMesTexto">S/ 0.00</div>
+    <div class="resumen-mes-rango" id="rangoFechasTexto"></div>
+  </div>
+
+  <div class="badge-cola" id="badgeCola" style="display:none" onclick="sincronizarCola()"></div>
+
+  <div class="label-monto">¿Cuánto gastaste?</div>
+  <div class="monto-display"><span class="sol">S/</span><span id="montoTexto">0</span></div>
+
+  <div class="keypad">
+    <button onclick="tecla('1')">1</button><button onclick="tecla('2')">2</button><button onclick="tecla('3')">3</button>
+    <button onclick="tecla('4')">4</button><button onclick="tecla('5')">5</button><button onclick="tecla('6')">6</button>
+    <button onclick="tecla('7')">7</button><button onclick="tecla('8')">8</button><button onclick="tecla('9')">9</button>
+    <button onclick="tecla('.')">.</button><button onclick="tecla('0')">0</button><button onclick="borrarTecla()">⌫</button>
+  </div>
+
+  <button class="btn-siguiente" id="btnSiguiente" disabled onclick="irACategoria()">Siguiente</button>
+  <button class="btn-resumen" onclick="verResumen()">📊 Ver resumen</button>
+  <button class="btn-resumen" onclick="mostrarPantalla('screenLimites'); construirListaLimites()">⚙️ Límites de gasto</button>
+</div>
+
+<div class="screen" id="screenCategoria">
+  <div class="top-bar">
+    <button class="btn-back" onclick="volverAMonto()">← Atrás</button>
+    <span class="monto-resumen" id="montoResumen">S/ 0</span>
+  </div>
+  <div class="titulo-cat">Elige una categoría</div>
+  <div class="grid-categorias" id="gridCategorias"></div>
+</div>
+
+<div class="screen" id="screenLimites">
+  <div class="top-bar">
+    <button class="btn-back" onclick="volverAMonto()">← Atrás</button>
+    <span class="monto-resumen">Límites de gasto</span>
+  </div>
+  <div class="limite-hint">Ponle un límite mensual a las categorías que quieras controlar. Déjalo vacío o en 0 si no quieres límite.</div>
+  <div id="listaLimites"></div>
+  <button class="btn-siguiente" style="margin-top:20px" onclick="guardarLimites()">Guardar límites</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  // ── Iconos por categoría (usa el array CATEGORIAS definido en auth.js) ────
+  const ICONS = {
+    Comida:'🍔', Golosinas:'🍬', Transporte:'🚕', Ocio:'🎮', Juegos:'🕹️', Herramientas:'🔧', Compras:'🛍️',
+    Ropa:'👕', Higiene:'🧻', Hogar:'🛏️', Útiles:'🧰', Servicios:'💡'
+  };
+
+  let montoStr = '';
+  let ultimosTotales = {};
+
+  const montoTexto = document.getElementById('montoTexto');
+  const btnSiguiente = document.getElementById('btnSiguiente');
+
+  function mostrarPantalla(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  function mostrarToast(mensaje, tipo) {
+    const toast = document.getElementById('toast');
+    toast.textContent = mensaje;
+    toast.className = tipo;
+    if (!mensaje) toast.style.display = 'none';
+  }
+
+  // ── TECLADO NUMÉRICO PROPIO ─────────────────────────────────────────────
+  // Antes esto usaba un <input type="number"> oculto + el teclado nativo del
+  // celular. Ese enfoque tenía dos problemas: 1) el navegador borra el valor
+  // mientras el número está "a medias" (ej. "12." antes del segundo decimal),
+  // por eso los números parecían desaparecer al escribir; 2) el teclado
+  // nativo tapaba el botón "Siguiente". Con un teclado propio en pantalla,
+  // el celular nunca abre su teclado, así que ambos problemas desaparecen.
+  function tecla(k) {
+    if (k === '.' && montoStr.includes('.')) return;
+    if (montoStr.length >= 8) return;
+    if (montoStr === '0' && k !== '.') montoStr = k;
+    else montoStr += k;
+    actualizarMontoTexto();
+  }
+  function borrarTecla() {
+    montoStr = montoStr.slice(0, -1);
+    actualizarMontoTexto();
+  }
+  function actualizarMontoTexto() {
+    montoTexto.textContent = montoStr || '0';
+    const val = parseFloat(montoStr);
+    btnSiguiente.disabled = !montoStr || isNaN(val) || val <= 0;
+  }
+
+  // ── CATEGORÍAS (grid generado desde CATEGORIAS de auth.js) ──────────────
+  function construirGridCategorias() {
+    if (typeof CATEGORIAS === 'undefined') {
+      // auth.js no ha terminado de cargar todavía: reintenta en un momento
+      // en vez de romper el resto de la inicialización de la app.
+      setTimeout(construirGridCategorias, 300);
+      return;
+    }
+    const cont = document.getElementById('gridCategorias');
+    cont.innerHTML = CATEGORIAS.map(cat => `
+      <button class="cat-btn" data-cat="${cat}" onclick="guardarGastoUI('${cat}')">
+        <span class="cat-icon">${ICONS[cat] || '🔹'}</span>${cat}
+      </button>`).join('');
+  }
+
+  // Espera a que la librería de Google (accounts.google.com/gsi/client)
+  // termine de cargar antes de usarla. Antes se asumía que ya estaba lista
+  // apenas disparaba el evento 'load' de la página, pero con internet lento
+  // eso no siempre es cierto todavía, y tronaba con "google is not defined".
+  function esperarGoogleListo(intentos) {
+    if (intentos === undefined) intentos = 20; // ~10 segundos en total
+    return new Promise((resolve, reject) => {
+      function check(n) {
+        if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+          resolve();
+        } else if (n <= 0) {
+          reject(new Error('No se pudo conectar con Google. Revisa tu internet y toca "Reintentar".'));
+        } else {
+          setTimeout(() => check(n - 1), 500);
+        }
+      }
+      check(intentos);
+    });
+  }
+
+  function iniciarConexionGoogle() {
+    esperarGoogleListo().then(() => {
+      try {
+        initGoogleAuth(() => {
+          document.getElementById('btnLogout').style.display = 'block';
+          mostrarPantalla('screenMonto');
+          asegurarResumen().then(actualizarResumenUI).catch(err => {
+            mostrarToast('⚠️ resumen: ' + err.message, 'error');
+            setTimeout(() => mostrarToast('', ''), 5000);
+          });
+        });
+
+        if (hasAccountOnThisDevice()) {
+          document.getElementById('btnLogout').style.display = 'block';
+          mostrarPantalla('screenMonto');
+          asegurarResumen().then(actualizarResumenUI).catch(err => {
+            mostrarToast('⚠️ resumen: ' + err.message, 'error');
+            setTimeout(() => mostrarToast('', ''), 5000);
+          });
+          sincronizarCola();
+        }
+        document.getElementById('btnReintentar').style.display = 'none';
+      } catch (e) {
+        mostrarToast('⚠️ ' + e.message, 'error');
+        document.getElementById('btnReintentar').style.display = 'block';
+      }
+    }).catch(e => {
+      mostrarToast('⚠️ ' + e.message, 'error');
+      document.getElementById('btnReintentar').style.display = 'block';
+    });
+  }
+
+  window.addEventListener('load', () => {
+    try { construirGridCategorias(); } catch (e) { console.error('grid categorias:', e); }
+    try { construirListaLimites(); } catch (e) { console.error('lista limites:', e); }
+    try { actualizarBadgeCola(); } catch (e) { console.error('badge cola:', e); }
+    try { if (navigator.onLine) sincronizarCola(); } catch (e) { console.error('sincronizar cola:', e); }
+
+    try {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    } catch (e) { console.error('notification permission:', e); }
+
+    iniciarConexionGoogle();
+  });
+
+  function cerrarSesion() {
+    signOut();
+    document.getElementById('btnLogout').style.display = 'none';
+    mostrarPantalla('screenLogin');
+  }
+
+  function irACategoria() {
+    const monto = parseFloat(montoStr);
+    if (!monto || monto <= 0) return;
+    document.getElementById('montoResumen').textContent = 'S/ ' + monto.toFixed(2);
+    mostrarPantalla('screenCategoria');
+  }
+
+  function volverAMonto() {
+    mostrarPantalla('screenMonto');
+  }
+
+  function verResumen() {
+    const url = urlHojaUsuario();
+    if (!url) {
+      mostrarToast('⚠️ Primero guarda un gasto', 'error');
+      return;
+    }
+    window.open(url, '_blank');
+  }
+
+  async function guardarGastoUI(categoria) {
+    const monto = parseFloat(montoStr);
+    if (!monto || monto <= 0) {
+      mostrarToast('⚠️ Monto inválido', 'error');
+      return;
+    }
+
+    mostrarToast('Guardando...', 'loading');
+
+    try {
+      const prevTotal = ultimosTotales[categoria] || 0;
+      await appendGasto(monto, categoria);
+      mostrarToast('✅ Guardado: S/ ' + monto.toFixed(2) + ' en ' + categoria, 'ok');
+
+      const limites = JSON.parse(localStorage.getItem('gastosnfc_limites') || '{}');
+      const limite = parseFloat(limites[categoria]) || 0;
+
+      leerResumenMes().then(totales => {
+        ultimosTotales = totales;
+        actualizarResumenUI();
+        const nuevoTotal = totales[categoria] || 0;
+        if (limite > 0 && prevTotal < limite && nuevoTotal >= limite) {
+          dispararAlerta(categoria, nuevoTotal, limite);
+        }
+      }).catch(err => {
+        mostrarToast('⚠️ no se pudo leer el resumen: ' + err.message, 'error');
+        setTimeout(() => mostrarToast('', ''), 4000);
+      });
+
+      setTimeout(() => {
+        montoStr = '';
+        actualizarMontoTexto();
+        mostrarToast('', '');
+        mostrarPantalla('screenMonto');
+      }, 1200);
+    } catch (err) {
+      // Si el problema es de red (sin internet o Sheets no respondió), no se
+      // pierde el gasto: se guarda en una cola local y se reintenta solo
+      // apenas vuelva la conexión, en vez de mostrar un error y obligarte a
+      // reescribirlo después.
+      if (esErrorDeRed(err)) {
+        encolarGastoOffline(monto, categoria);
+        mostrarToast('📥 sin internet: guardado localmente, se sincroniza solo', 'ok');
+        setTimeout(() => {
+          montoStr = '';
+          actualizarMontoTexto();
+          mostrarToast('', '');
+          mostrarPantalla('screenMonto');
+        }, 1600);
+      } else {
+        mostrarToast('❌ ' + err.message, 'error');
+      }
+    }
+  }
+
+  // ── MODO OFFLINE (cola de sincronización) ─────────────────────────────
+  function esErrorDeRed(err) {
+    if (!navigator.onLine) return true;
+    const msg = (err && err.message || '').toLowerCase();
+    return msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('load failed');
+  }
+
+  function leerCola() {
+    return JSON.parse(localStorage.getItem('gastosnfc_cola') || '[]');
+  }
+  function guardarCola(cola) {
+    localStorage.setItem('gastosnfc_cola', JSON.stringify(cola));
+    actualizarBadgeCola();
+  }
+  function encolarGastoOffline(monto, categoria) {
+    const cola = leerCola();
+    cola.push({ monto, categoria, ts: Date.now() });
+    guardarCola(cola);
+  }
+
+  function actualizarBadgeCola() {
+    const cola = leerCola();
+    const badge = document.getElementById('badgeCola');
+    if (!badge) return;
+    if (cola.length > 0) {
+      badge.style.display = 'block';
+      badge.textContent = `📥 ${cola.length} gasto${cola.length !== 1 ? 's' : ''} sin sincronizar aún`;
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  let sincronizando = false;
+  async function sincronizarCola() {
+    if (sincronizando) return;
+    const cola = leerCola();
+    if (!cola.length) return;
+    sincronizando = true;
+    try {
+      let restante = [...cola];
+      for (const item of cola) {
+        try {
+          await appendGasto(item.monto, item.categoria);
+          restante = restante.filter(x => x !== item);
+          guardarCola(restante);
+        } catch (e) {
+          if (esErrorDeRed(e)) break; // sigue sin internet, se reintenta después
+          restante = restante.filter(x => x !== item); // error real (no de red): se descarta para no trabar la cola
+          guardarCola(restante);
+        }
+      }
+      if (restante.length < cola.length) {
+        actualizarResumenUI();
+        if (restante.length === 0) {
+          mostrarToast('✅ gastos pendientes sincronizados', 'ok');
+          setTimeout(() => mostrarToast('', ''), 2500);
+        }
+      }
+    } finally {
+      sincronizando = false;
+    }
+  }
+
+  window.addEventListener('online', sincronizarCola);
+
+
+  function construirListaLimites() {
+    if (typeof CATEGORIAS === 'undefined') {
+      setTimeout(construirListaLimites, 300);
+      return;
+    }
+    const limites = JSON.parse(localStorage.getItem('gastosnfc_limites') || '{}');
+    document.getElementById('listaLimites').innerHTML = CATEGORIAS.map(cat => `
+      <div class="limite-row">
+        <label>${ICONS[cat] || ''} ${cat}</label>
+        <input type="number" min="0" step="1" data-cat="${cat}" value="${limites[cat] || ''}" placeholder="sin límite">
+      </div>`).join('');
+  }
+
+  function guardarLimites() {
+    const limites = {};
+    document.querySelectorAll('#listaLimites input').forEach(inp => {
+      const v = parseFloat(inp.value);
+      if (v > 0) limites[inp.dataset.cat] = v;
+    });
+    localStorage.setItem('gastosnfc_limites', JSON.stringify(limites));
+    mostrarToast('✅ Límites guardados', 'ok');
+    setTimeout(() => {
+      mostrarToast('', '');
+      volverAMonto();
+      actualizarResumenUI();
+    }, 900);
+  }
+
+  // ── RESUMEN DEL MES (leído directo del Sheet, siempre real) ──────────────
+  // Antes esto leía una fórmula SUMIFS ya calculada en la pestaña "Resumen".
+  // Esa comparación de fechas como texto dentro de Sheets podía no coincidir
+  // y devolver siempre 0, sin ningún error visible en la app. Ahora se suma
+  // directo acá, leyendo la pestaña "Gastos" (que sabemos que sí funciona,
+  // porque ahí es donde se guarda cada gasto) y comparando el mes con el
+  // mismo formato exacto con el que se guardó, sin pasar por Sheets.
+  async function leerResumenMes() {
+    const token = await getValidToken();
+    const sheetId = await getOrCreateSheet();
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Gastos!A:E`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error('leyendo Gastos: ' + (err.error && err.error.message ? err.error.message : res.status));
+    }
+    const data = await res.json();
+    const filas = (data.values || []).slice(1); // saltar encabezado
+    const mesActual = new Date().toISOString().slice(0, 7); // "2026-07", igual que al guardar
+
+    const totales = {};
+    CATEGORIAS.forEach(cat => { totales[cat] = 0; });
+    totales.__total = 0;
+
+    filas.forEach(f => {
+      const monto = parseFloat(f[2]) || 0;
+      const categoria = f[3];
+      const mes = f[4];
+      if (mes === mesActual) {
+        if (totales.hasOwnProperty(categoria)) totales[categoria] += monto;
+        totales.__total += monto;
+      }
+    });
+
+    return totales;
+  }
+
+  function rangoFechas() {
+    const now = new Date();
+    const inicio = new Date(now.getFullYear(), now.getMonth(), 1);
+    const fmt = d => d.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit' });
+    return `${fmt(inicio)} – ${fmt(now)} de ${now.getFullYear()}`;
+  }
+
+  async function actualizarResumenUI() {
+    try {
+      const totales = await leerResumenMes();
+      ultimosTotales = totales;
+      document.getElementById('totalMesTexto').textContent = 'S/ ' + (totales.__total || 0).toFixed(2);
+      document.getElementById('rangoFechasTexto').textContent = rangoFechas();
+
+      const limites = JSON.parse(localStorage.getItem('gastosnfc_limites') || '{}');
+      CATEGORIAS.forEach(cat => {
+        const btn = document.querySelector(`.cat-btn[data-cat="${cat}"]`);
+        if (!btn) return;
+        const limite = parseFloat(limites[cat]) || 0;
+        const gastado = totales[cat] || 0;
+        btn.classList.toggle('over-limit', limite > 0 && gastado >= limite);
+      });
+    } catch (e) {
+      mostrarToast('⚠️ error en resumen: ' + e.message, 'error');
+      setTimeout(() => mostrarToast('', ''), 5000);
+    }
+  }
+
+  // ── ALERTA VISUAL + NOTIFICACIÓN ──────────────────────────────────────────
+  function dispararAlerta(cat, gastado, limite) {
+    mostrarToast(`⚠️ Superaste tu límite de ${cat}: S/ ${gastado.toFixed(2)} / S/ ${limite.toFixed(2)}`, 'error');
+    lanzarEmojisCayendo(ICONS[cat] || '⚠️');
+    setTimeout(() => mostrarToast('', ''), 3200);
+
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('Límite de gasto superado', {
+        body: `${cat}: S/ ${gastado.toFixed(2)} de S/ ${limite.toFixed(2)} este mes`
+      });
+    }
+  }
+
+  function lanzarEmojisCayendo(emoji) {
+    for (let i = 0; i < 6; i++) {
+      const s = document.createElement('span');
+      s.className = 'emoji-cae';
+      s.textContent = emoji;
+      s.style.left = (Math.random() * 90) + '%';
+      s.style.animationDelay = (Math.random() * 0.3) + 's';
+      document.body.appendChild(s);
+      setTimeout(() => s.remove(), 1800);
+    }
+  }
+</script>
+
+</body>
+</html>
